@@ -24,7 +24,7 @@ Con este esquema, en régimen estacionario se ejecuta **una instrucción por cic
 | `ALU`, `control_unit`, `main_decoder`, `alu_decoder` | **Sin cambios** |
 | `extend`, `reg_file`, `single_port_ram`, `BitSelector` | **Sin cambios** |
 | `instructionMemory`, `pc.sv`, `pc_increment.sv` | **Sin cambios** |
-| `top.sv` | Reemplazado por `top_pipeline.sv` |
+| `top.sv` | Modificado para agregar Hazard Unit y los registros nuevos |
 | `pipeline_regs.sv` | **Nuevo** – 4 registros de segmentación |
 | `hazard_unit.sv` | **Nuevo** – Detección y resolución de hazards |
 
@@ -98,9 +98,9 @@ Los saltos y branches se resuelven al **final de la etapa EX** (cuando la ALU ca
 
 ---
 
-### `top_pipeline.sv`
+### `top.sv`
 
-Módulo top-level del procesador segmentado. Reemplaza a `top.sv` e instancia todos los módulos originales más los nuevos de pipeline.
+Módulo top-level del procesador segmentado. Ahora `top.sv` instancia todos los módulos originales más los nuevos de pipeline.
 
 **Estructura de señales por etapa:**
 
@@ -128,7 +128,7 @@ Diferencias clave respecto a `top.sv`:
 
 **Síntoma:** La instrucción `LUI x2, 0x00012` dejaba `x2 = 0x00345678` en lugar de `0x00012000 + offset`. El byte superior construido con LUI se perdía.
 
-**Causa raíz:** El registro `reg_EX_MEM` no tenía puertos `imm_in / imm_out`. Al llegar a la etapa MEM, el inmediato era `32'b0`. En `top_pipeline.sv` la conexión original decía literalmente `.imm_in(32'b0)`.
+**Causa raíz:** El registro `reg_EX_MEM` no tenía puertos `imm_in / imm_out`. Al llegar a la etapa MEM, el inmediato era `32'b0`. En `top.sv` la conexión original decía literalmente `.imm_in(32'b0)`.
 
 **Solución:**
 1. Se añadieron los puertos `imm_in` / `imm_out` a `reg_EX_MEM` en `pipeline_regs.sv`.
@@ -141,7 +141,7 @@ Con este fix, la cadena completa `imm_ID → imm_EX → imm_MEM → imm_WB` qued
 
 ## 4. Programas de prueba
 
-Los mismos dos programas del Proyecto 2 se utilizan para validar el procesador segmentado. El testbench `tb_top_pipeline.sv` es idéntico en estructura al original, con las siguientes adaptaciones:
+Los mismos dos programas del Proyecto 2 se utilizan para validar el procesador segmentado. El testbench `tb_top.sv` es idéntico en estructura al original, con las siguientes adaptaciones:
 
 - Los paths de acceso jerárquico apuntan a `u_top.regs.regs[N]` y `u_top.data_mem.ram[N]` (sin cambio de nombres).
 - Se añaden **~5 ciclos de margen** sobre el número original de ciclos de espera, para compensar la latencia de llenado del pipeline (4 ciclos la primera instrucción).
