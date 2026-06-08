@@ -1,399 +1,398 @@
 // ============================================================
 // tb_pipeline_regs.sv
 // Testbench para los registros de segmentación del pipeline
+//
+// Estrategia: verificar que entrada == salida tras un flanco,
+// mostrando los valores reales que fluyen (sin constantes mágicas).
+// Se prueban los 4 comportamientos de cada registro:
+//   1. Reset/flush  → todos los campos a cero
+//   2. Captura normal → salida = entrada tras posedge
+//   3. Stall (solo IF/ID) → salida se congela, entrada nueva ignorada
+//   4. Flush (ID/EX)     → limpia señales de control
 // ============================================================
 `timescale 1ns/1ps
 
 module tb_pipeline_regs;
-    // Variables de prueba
+
+    // -------------------------------------------------------
+    // Contadores globales de pass/fail
+    // -------------------------------------------------------
     integer test_pass = 0, test_fail = 0;
 
-    // ============================================================
-    // Pruebas para reg_IF_ID
-    // ============================================================
-    logic clk_ifid, rst_ifid, stall_ifid, flush_ifid;
-    logic [31:0] PC_ifid_in, PCplus4_ifid_in, instr_ifid_in;
-    logic [31:0] PC_ifid_out, PCplus4_ifid_out, instr_ifid_out;
+    // -------------------------------------------------------
+    // Clock único compartido (todos los registros son síncronos)
+    // -------------------------------------------------------
+    logic clk;
+    initial clk = 0;
+    always #5 clk = ~clk;
 
-    reg_IF_ID dut_IF_ID (
-        .clk(clk_ifid),
-        .rst(rst_ifid),
-        .stall(stall_ifid),
-        .flush(flush_ifid),
-        .PC_in(PC_ifid_in),
-        .PCplus4_in(PCplus4_ifid_in),
-        .instr_in(instr_ifid_in),
-        .PC_out(PC_ifid_out),
-        .PCplus4_out(PCplus4_ifid_out),
-        .instr_out(instr_ifid_out)
+    // -------------------------------------------------------
+    // Tarea genérica de comparación de 1 campo de 32 bits
+    //   Imprime entrada, salida obtenida y resultado.
+    // -------------------------------------------------------
+    task automatic check32(
+        input string  label,
+        input logic [31:0] got,
+        input logic [31:0] exp
+    );
+        if (got === exp) begin
+            $display("  [PASS] %-35s  entrada=%h  salida=%h", label, exp, got);
+            test_pass++;
+        end else begin
+            $display("  [FAIL] %-35s  esperado=%h  obtenido=%h", label, exp, got);
+            test_fail++;
+        end
+    endtask
+
+    task automatic check5(
+        input string  label,
+        input logic [4:0] got,
+        input logic [4:0] exp
+    );
+        if (got === exp) begin
+            $display("  [PASS] %-35s  entrada=%0d  salida=%0d", label, exp, got);
+            test_pass++;
+        end else begin
+            $display("  [FAIL] %-35s  esperado=%0d  obtenido=%0d", label, exp, got);
+            test_fail++;
+        end
+    endtask
+
+    task automatic check1(
+        input string  label,
+        input logic got,
+        input logic exp
+    );
+        if (got === exp) begin
+            $display("  [PASS] %-35s  entrada=%b  salida=%b", label, exp, got);
+            test_pass++;
+        end else begin
+            $display("  [FAIL] %-35s  esperado=%b  obtenido=%b", label, exp, got);
+            test_fail++;
+        end
+    endtask
+
+    // ===========================================================
+    // ----  Registro IF/ID  -------------------------------------
+    // ===========================================================
+    logic        rst_ifid, stall_ifid, flush_ifid;
+    logic [31:0] PC_ifid_in, PCp4_ifid_in, instr_ifid_in;
+    logic [31:0] PC_ifid_out, PCp4_ifid_out, instr_ifid_out;
+
+    reg_IF_ID dut_ifid (
+        .clk        (clk),
+        .rst        (rst_ifid),
+        .stall      (stall_ifid),
+        .flush      (flush_ifid),
+        .PC_in      (PC_ifid_in),
+        .PCplus4_in (PCp4_ifid_in),
+        .instr_in   (instr_ifid_in),
+        .PC_out     (PC_ifid_out),
+        .PCplus4_out(PCp4_ifid_out),
+        .instr_out  (instr_ifid_out)
     );
 
-    // ============================================================
-    // Pruebas para reg_ID_EX
-    // ============================================================
-    logic clk_idex, rst_idex, flush_idex;
-    logic RegWrite_idex_in, RegWrite_idex_out;
-    logic [1:0] ResultSrc_idex_in, ResultSrc_idex_out;
-    logic MemWriteEn_idex_in, MemWriteEn_idex_out;
-    logic [1:0] MemWrite_idex_in, MemWrite_idex_out;
-    logic ALUSrc_idex_in, ALUSrc_idex_out;
-    logic [3:0] ALUControl_idex_in, ALUControl_idex_out;
-    logic [2:0] BitSel_idex_in, BitSel_idex_out;
-    logic Sh_idex_in, Sh_idex_out;
-    logic Jump_idex_in, Jump_idex_out;
-    logic Branch_idex_in, Branch_idex_out;
-    logic [31:0] PC_idex_in, PC_idex_out;
-    logic [31:0] rdata1_idex_in, rdata1_idex_out;
-    logic [31:0] rdata2_idex_in, rdata2_idex_out;
+    // ===========================================================
+    // ----  Registro ID/EX  -------------------------------------
+    // ===========================================================
+    logic        rst_idex, flush_idex;
+    logic        RW_idex_in,  RW_idex_out;
+    logic [1:0]  RS_idex_in,  RS_idex_out;
+    logic        MWE_idex_in, MWE_idex_out;
+    logic [1:0]  MW_idex_in,  MW_idex_out;
+    logic        AS_idex_in,  AS_idex_out;
+    logic [3:0]  AC_idex_in,  AC_idex_out;
+    logic [2:0]  BS_idex_in,  BS_idex_out;
+    logic        Sh_idex_in,  Sh_idex_out;
+    logic        Jmp_idex_in, Jmp_idex_out;
+    logic        Br_idex_in,  Br_idex_out;
+    logic [31:0] PC_idex_in,  PC_idex_out;
+    logic [31:0] PCp4_idex_in,PCp4_idex_out;
+    logic [31:0] rd1_idex_in, rd1_idex_out;
+    logic [31:0] rd2_idex_in, rd2_idex_out;
     logic [31:0] imm_idex_in, imm_idex_out;
-    logic [4:0] rd_idex_in, rd_idex_out;
-    logic [4:0] rs1_idex_in, rs1_idex_out;
-    logic [4:0] rs2_idex_in, rs2_idex_out;
-    logic [6:0] opcode_idex_in, opcode_idex_out;
-    logic [2:0] funct3_idex_in, funct3_idex_out;
+    logic [4:0]  rd_idex_in,  rd_idex_out;
+    logic [4:0]  rs1_idex_in, rs1_idex_out;
+    logic [4:0]  rs2_idex_in, rs2_idex_out;
+    logic [6:0]  op_idex_in,  op_idex_out;
+    logic [2:0]  f3_idex_in,  f3_idex_out;
 
-    reg_ID_EX dut_ID_EX (
-        .clk(clk_idex),
-        .rst(rst_idex),
-        .flush(flush_idex),
-        .RegWrite_in(RegWrite_idex_in),
-        .RegWrite_out(RegWrite_idex_out),
-        .ResultSrc_in(ResultSrc_idex_in),
-        .ResultSrc_out(ResultSrc_idex_out),
-        .MemWriteEn_in(MemWriteEn_idex_in),
-        .MemWriteEn_out(MemWriteEn_idex_out),
-        .MemWrite_in(MemWrite_idex_in),
-        .MemWrite_out(MemWrite_idex_out),
-        .ALUSrc_in(ALUSrc_idex_in),
-        .ALUSrc_out(ALUSrc_idex_out),
-        .ALUControl_in(ALUControl_idex_in),
-        .ALUControl_out(ALUControl_idex_out),
-        .BitSel_in(BitSel_idex_in),
-        .BitSel_out(BitSel_idex_out),
-        .Sh_in(Sh_idex_in),
-        .Sh_out(Sh_idex_out),
-        .Jump_in(Jump_idex_in),
-        .Jump_out(Jump_idex_out),
-        .Branch_in(Branch_idex_in),
-        .Branch_out(Branch_idex_out),
-        .PC_in(PC_idex_in),
-        .PC_out(PC_idex_out),
-        .PCplus4_in(32'b0),
-        .PCplus4_out(),
-        .rdata1_in(rdata1_idex_in),
-        .rdata1_out(rdata1_idex_out),
-        .rdata2_in(rdata2_idex_in),
-        .rdata2_out(rdata2_idex_out),
-        .imm_in(imm_idex_in),
-        .imm_out(imm_idex_out),
-        .rd_in(rd_idex_in),
-        .rd_out(rd_idex_out),
-        .rs1_in(rs1_idex_in),
-        .rs1_out(rs1_idex_out),
-        .rs2_in(rs2_idex_in),
-        .rs2_out(rs2_idex_out),
-        .opcode_in(opcode_idex_in),
-        .opcode_out(opcode_idex_out),
-        .funct3_in(funct3_idex_in),
-        .funct3_out(funct3_idex_out)
+    reg_ID_EX dut_idex (
+        .clk(clk), .rst(rst_idex), .flush(flush_idex),
+        .RegWrite_in(RW_idex_in),   .RegWrite_out(RW_idex_out),
+        .ResultSrc_in(RS_idex_in),  .ResultSrc_out(RS_idex_out),
+        .MemWriteEn_in(MWE_idex_in),.MemWriteEn_out(MWE_idex_out),
+        .MemWrite_in(MW_idex_in),   .MemWrite_out(MW_idex_out),
+        .ALUSrc_in(AS_idex_in),     .ALUSrc_out(AS_idex_out),
+        .ALUControl_in(AC_idex_in), .ALUControl_out(AC_idex_out),
+        .BitSel_in(BS_idex_in),     .BitSel_out(BS_idex_out),
+        .Sh_in(Sh_idex_in),         .Sh_out(Sh_idex_out),
+        .Jump_in(Jmp_idex_in),      .Jump_out(Jmp_idex_out),
+        .Branch_in(Br_idex_in),     .Branch_out(Br_idex_out),
+        .PC_in(PC_idex_in),         .PC_out(PC_idex_out),
+        .PCplus4_in(PCp4_idex_in),  .PCplus4_out(PCp4_idex_out),
+        .rdata1_in(rd1_idex_in),    .rdata1_out(rd1_idex_out),
+        .rdata2_in(rd2_idex_in),    .rdata2_out(rd2_idex_out),
+        .imm_in(imm_idex_in),       .imm_out(imm_idex_out),
+        .rd_in(rd_idex_in),         .rd_out(rd_idex_out),
+        .rs1_in(rs1_idex_in),       .rs1_out(rs1_idex_out),
+        .rs2_in(rs2_idex_in),       .rs2_out(rs2_idex_out),
+        .opcode_in(op_idex_in),     .opcode_out(op_idex_out),
+        .funct3_in(f3_idex_in),     .funct3_out(f3_idex_out)
     );
 
-    // ============================================================
-    // Pruebas para reg_EX_MEM
-    // ============================================================
-    logic clk_exmem, rst_exmem;
-    logic RegWrite_exmem_in, RegWrite_exmem_out;
-    logic [1:0] ResultSrc_exmem_in, ResultSrc_exmem_out;
-    logic MemWriteEn_exmem_in, MemWriteEn_exmem_out;
-    logic [1:0] MemWrite_exmem_in, MemWrite_exmem_out;
-    logic [2:0] BitSel_exmem_in, BitSel_exmem_out;
-    logic [31:0] PCplus4_exmem_in, PCplus4_exmem_out;
-    logic [31:0] ALUResult_exmem_in, ALUResult_exmem_out;
-    logic [31:0] rdata2_exmem_in, rdata2_exmem_out;
+    // ===========================================================
+    // ----  Registro EX/MEM  ------------------------------------
+    // ===========================================================
+    logic        rst_exmem;
+    logic        RW_exmem_in,  RW_exmem_out;
+    logic [1:0]  RS_exmem_in,  RS_exmem_out;
+    logic        MWE_exmem_in, MWE_exmem_out;
+    logic [1:0]  MW_exmem_in,  MW_exmem_out;
+    logic [2:0]  BS_exmem_in,  BS_exmem_out;
+    logic [31:0] PCp4_exmem_in,PCp4_exmem_out;
+    logic [31:0] ALU_exmem_in, ALU_exmem_out;
+    logic [31:0] rd2_exmem_in, rd2_exmem_out;
     logic [31:0] imm_exmem_in, imm_exmem_out;
-    logic [4:0] rd_exmem_in, rd_exmem_out;
+    logic [4:0]  rd_exmem_in,  rd_exmem_out;
 
-    reg_EX_MEM dut_EX_MEM (
-        .clk(clk_exmem),
-        .rst(rst_exmem),
-        .RegWrite_in(RegWrite_exmem_in),
-        .RegWrite_out(RegWrite_exmem_out),
-        .ResultSrc_in(ResultSrc_exmem_in),
-        .ResultSrc_out(ResultSrc_exmem_out),
-        .MemWriteEn_in(MemWriteEn_exmem_in),
-        .MemWriteEn_out(MemWriteEn_exmem_out),
-        .MemWrite_in(MemWrite_exmem_in),
-        .MemWrite_out(MemWrite_exmem_out),
-        .BitSel_in(BitSel_exmem_in),
-        .BitSel_out(BitSel_exmem_out),
-        .PCplus4_in(PCplus4_exmem_in),
-        .PCplus4_out(PCplus4_exmem_out),
-        .ALUResult_in(ALUResult_exmem_in),
-        .ALUResult_out(ALUResult_exmem_out),
-        .rdata2_in(rdata2_exmem_in),
-        .rdata2_out(rdata2_exmem_out),
-        .imm_in(imm_exmem_in),
-        .imm_out(imm_exmem_out),
-        .rd_in(rd_exmem_in),
-        .rd_out(rd_exmem_out)
+    reg_EX_MEM dut_exmem (
+        .clk(clk), .rst(rst_exmem),
+        .RegWrite_in(RW_exmem_in),   .RegWrite_out(RW_exmem_out),
+        .ResultSrc_in(RS_exmem_in),  .ResultSrc_out(RS_exmem_out),
+        .MemWriteEn_in(MWE_exmem_in),.MemWriteEn_out(MWE_exmem_out),
+        .MemWrite_in(MW_exmem_in),   .MemWrite_out(MW_exmem_out),
+        .BitSel_in(BS_exmem_in),     .BitSel_out(BS_exmem_out),
+        .PCplus4_in(PCp4_exmem_in),  .PCplus4_out(PCp4_exmem_out),
+        .ALUResult_in(ALU_exmem_in), .ALUResult_out(ALU_exmem_out),
+        .rdata2_in(rd2_exmem_in),    .rdata2_out(rd2_exmem_out),
+        .imm_in(imm_exmem_in),       .imm_out(imm_exmem_out),
+        .rd_in(rd_exmem_in),         .rd_out(rd_exmem_out)
     );
 
-    // ============================================================
-    // Pruebas para reg_MEM_WB
-    // ============================================================
-    logic clk_memwb, rst_memwb;
-    logic RegWrite_memwb_in, RegWrite_memwb_out;
-    logic [1:0] ResultSrc_memwb_in, ResultSrc_memwb_out;
-    logic [31:0] PCplus4_memwb_in, PCplus4_memwb_out;
-    logic [31:0] ALUResult_memwb_in, ALUResult_memwb_out;
-    logic [31:0] mem_rdata_memwb_in, mem_rdata_memwb_out;
+    // ===========================================================
+    // ----  Registro MEM/WB  ------------------------------------
+    // ===========================================================
+    logic        rst_memwb;
+    logic        RW_memwb_in,  RW_memwb_out;
+    logic [1:0]  RS_memwb_in,  RS_memwb_out;
+    logic [31:0] PCp4_memwb_in,PCp4_memwb_out;
+    logic [31:0] ALU_memwb_in, ALU_memwb_out;
+    logic [31:0] mrd_memwb_in, mrd_memwb_out;
     logic [31:0] imm_memwb_in, imm_memwb_out;
-    logic [4:0] rd_memwb_in, rd_memwb_out;
+    logic [4:0]  rd_memwb_in,  rd_memwb_out;
 
-    reg_MEM_WB dut_MEM_WB (
-        .clk(clk_memwb),
-        .rst(rst_memwb),
-        .RegWrite_in(RegWrite_memwb_in),
-        .RegWrite_out(RegWrite_memwb_out),
-        .ResultSrc_in(ResultSrc_memwb_in),
-        .ResultSrc_out(ResultSrc_memwb_out),
-        .PCplus4_in(PCplus4_memwb_in),
-        .PCplus4_out(PCplus4_memwb_out),
-        .ALUResult_in(ALUResult_memwb_in),
-        .ALUResult_out(ALUResult_memwb_out),
-        .mem_rdata_in(mem_rdata_memwb_in),
-        .mem_rdata_out(mem_rdata_memwb_out),
-        .imm_in(imm_memwb_in),
-        .imm_out(imm_memwb_out),
-        .rd_in(rd_memwb_in),
-        .rd_out(rd_memwb_out)
+    reg_MEM_WB dut_memwb (
+        .clk(clk), .rst(rst_memwb),
+        .RegWrite_in(RW_memwb_in),     .RegWrite_out(RW_memwb_out),
+        .ResultSrc_in(RS_memwb_in),    .ResultSrc_out(RS_memwb_out),
+        .PCplus4_in(PCp4_memwb_in),    .PCplus4_out(PCp4_memwb_out),
+        .ALUResult_in(ALU_memwb_in),   .ALUResult_out(ALU_memwb_out),
+        .mem_rdata_in(mrd_memwb_in),   .mem_rdata_out(mrd_memwb_out),
+        .imm_in(imm_memwb_in),         .imm_out(imm_memwb_out),
+        .rd_in(rd_memwb_in),           .rd_out(rd_memwb_out)
     );
 
-    // Task para verificar IF/ID
-    task automatic check_IF_ID(
-        input string test_name,
-        input logic [31:0] exp_PC,
-        input logic [31:0] exp_PCplus4,
-        input logic [31:0] exp_instr
-    );
-        if ((PC_ifid_out === exp_PC) && (PCplus4_ifid_out === exp_PCplus4) && 
-            (instr_ifid_out === exp_instr)) begin
-            $display("[PASS] %s", test_name);
-            test_pass++;
-        end else begin
-            $display("[FAIL] %s", test_name);
-            $display("       Expected: PC=%h, PCplus4=%h, instr=%h",
-                     exp_PC, exp_PCplus4, exp_instr);
-            $display("       Got:      PC=%h, PCplus4=%h, instr=%h",
-                     PC_ifid_out, PCplus4_ifid_out, instr_ifid_out);
-            test_fail++;
-        end
-    endtask
-
-    // Task para verificar ID/EX
-    task automatic check_ID_EX(
-        input string test_name,
-        input logic exp_RegWrite,
-        input logic [31:0] exp_PC,
-        input logic [31:0] exp_rdata1
-    );
-        if ((RegWrite_idex_out === exp_RegWrite) && (PC_idex_out === exp_PC) && 
-            (rdata1_idex_out === exp_rdata1)) begin
-            $display("[PASS] %s", test_name);
-            test_pass++;
-        end else begin
-            $display("[FAIL] %s", test_name);
-            $display("       Expected: RegWrite=%b, PC=%h, rdata1=%h",
-                     exp_RegWrite, exp_PC, exp_rdata1);
-            $display("       Got:      RegWrite=%b, PC=%h, rdata1=%h",
-                     RegWrite_idex_out, PC_idex_out, rdata1_idex_out);
-            test_fail++;
-        end
-    endtask
-
-    // Clock generators
-    initial begin
-        clk_ifid = 0;
-        forever #5 clk_ifid = ~clk_ifid;
-    end
-
-    initial begin
-        clk_idex = 0;
-        forever #5 clk_idex = ~clk_idex;
-    end
-
-    initial begin
-        clk_exmem = 0;
-        forever #5 clk_exmem = ~clk_exmem;
-    end
-
-    initial begin
-        clk_memwb = 0;
-        forever #5 clk_memwb = ~clk_memwb;
-    end
-
+    // ===========================================================
+    // Estímulos principales
+    // ===========================================================
     initial begin
         $dumpfile("tb_pipeline_regs.vcd");
         $dumpvars(0, tb_pipeline_regs);
 
         $display("============================================================");
-        $display("  TESTBENCH: Pipeline Registers");
+        $display("  TESTBENCH: Registros de Segmentacion del Pipeline");
+        $display("  Muestra: campo | valor de entrada | valor capturado");
         $display("============================================================\n");
 
-        // ============================================================
-        // PRUEBAS PARA reg_IF_ID
-        // ============================================================
-        $display("=== PRUEBAS PARA reg_IF_ID ===\n");
+        // -----------------------------------------------------------
+        // ===  reg_IF_ID  ===
+        // -----------------------------------------------------------
+        $display("=== reg_IF_ID ===\n");
 
-        // Prueba 1: Reset
-        $display("Prueba 1: Reset");
-        rst_ifid = 1;
-        stall_ifid = 0;
-        flush_ifid = 0;
-        PC_ifid_in = 32'h00000000;
-        PCplus4_ifid_in = 32'h00000004;
-        instr_ifid_in = 32'h00000000;
-        #10;
-        check_IF_ID("Reset clears all", 32'h0, 32'h0, 32'h0);
+        // -- 1. Reset ---
+        $display("-- Prueba 1: Reset activo --");
+        rst_ifid = 1; stall_ifid = 0; flush_ifid = 0;
+        PC_ifid_in    = 32'hABCD_1234;
+        PCp4_ifid_in  = 32'hABCD_1238;
+        instr_ifid_in = 32'hFACE_CAFE;
+        @(posedge clk); #1;
+        check32("IF/ID PC_out    (rst=1)", PC_ifid_out,    32'h0);
+        check32("IF/ID PCplus4_out(rst=1)", PCp4_ifid_out,  32'h0);
+        check32("IF/ID instr_out (rst=1)", instr_ifid_out, 32'h0);
 
-        // Prueba 2: Captura de datos
-        $display("\nPrueba 2: Captura de datos");
+        // -- 2. Captura normal ---
+        $display("\n-- Prueba 2: Captura normal --");
         rst_ifid = 0;
-        PC_ifid_in = 32'h00000100;
-        PCplus4_ifid_in = 32'h00000104;
-        instr_ifid_in = 32'h12345678;
-        #10;
-        check_IF_ID("Data capture", 32'h00000100, 32'h00000104, 32'h12345678);
+        PC_ifid_in    = 32'h0000_0100;
+        PCp4_ifid_in  = 32'h0000_0104;
+        instr_ifid_in = 32'h0062_8233;   // add x4, x5, x6 (RV32I)
+        @(posedge clk); #1;
+        check32("IF/ID PC_out",     PC_ifid_out,    PC_ifid_in);
+        check32("IF/ID PCplus4_out",PCp4_ifid_out,  PCp4_ifid_in);
+        check32("IF/ID instr_out",  instr_ifid_out, instr_ifid_in);
 
-        // Prueba 3: Stall (mantiene valores)
-        $display("\nPrueba 3: Stall mantiene valores");
+        // -- 3. Stall: salida debe congelarse ---
+        $display("\n-- Prueba 3: Stall (salida debe permanecer igual) --");
         stall_ifid = 1;
-        PC_ifid_in = 32'hFFFFFFFF;
-        PCplus4_ifid_in = 32'hFFFFFFFF;
-        instr_ifid_in = 32'hFFFFFFFF;
-        #10;
-        check_IF_ID("Stall preserves data", 32'h00000100, 32'h00000104, 32'h12345678);
+        PC_ifid_in    = 32'hFFFF_FFFF;   // nueva entrada que NO debe capturarse
+        PCp4_ifid_in  = 32'hFFFF_FFFF;
+        instr_ifid_in = 32'hFFFF_FFFF;
+        @(posedge clk); #1;
+        check32("IF/ID PC_out    (stall)", PC_ifid_out,    32'h0000_0100);
+        check32("IF/ID PCplus4_out(stall)",PCp4_ifid_out,  32'h0000_0104);
+        check32("IF/ID instr_out (stall)", instr_ifid_out, 32'h0062_8233);
 
-        // Prueba 4: Flush (inserta NOP)
-        $display("\nPrueba 4: Flush inserta NOP");
-        stall_ifid = 0;
-        flush_ifid = 1;
-        #10;
-        check_IF_ID("Flush inserts NOP", 32'h0, 32'h0, 32'h0);
+        // -- 4. Flush: debe insertar NOP ---
+        $display("\n-- Prueba 4: Flush (NOP = todos en cero) --");
+        stall_ifid = 0; flush_ifid = 1;
+        @(posedge clk); #1;
+        check32("IF/ID PC_out    (flush)", PC_ifid_out,    32'h0);
+        check32("IF/ID PCplus4_out(flush)",PCp4_ifid_out,  32'h0);
+        check32("IF/ID instr_out (flush)", instr_ifid_out, 32'h0);
+        flush_ifid = 0;
 
-        // ============================================================
-        // PRUEBAS PARA reg_ID_EX
-        // ============================================================
-        $display("\n=== PRUEBAS PARA reg_ID_EX ===\n");
+        // -----------------------------------------------------------
+        // ===  reg_ID_EX  ===
+        // -----------------------------------------------------------
+        $display("\n=== reg_ID_EX ===\n");
 
-        // Prueba 5: Reset y captura
-        $display("Prueba 5: Reset y captura de datos");
-        rst_idex = 1;
-        flush_idex = 0;
-        #10;
-        
+        // -- 5. Reset ---
+        $display("-- Prueba 5: Reset activo --");
+        rst_idex = 1; flush_idex = 0;
+        RW_idex_in  = 1;  RS_idex_in  = 2'b10; MWE_idex_in = 1;
+        MW_idex_in  = 2'b01; AS_idex_in = 1; AC_idex_in = 4'b1000;
+        BS_idex_in  = 3'b010; Sh_idex_in = 1; Jmp_idex_in = 1; Br_idex_in = 1;
+        PC_idex_in  = 32'h0000_0200; PCp4_idex_in = 32'h0000_0204;
+        rd1_idex_in = 32'h1111_1111; rd2_idex_in  = 32'h2222_2222;
+        imm_idex_in = 32'h0000_0010; rd_idex_in   = 5'd5;
+        rs1_idex_in = 5'd1; rs2_idex_in = 5'd2;
+        op_idex_in  = 7'b011_0011; f3_idex_in = 3'b000;
+        @(posedge clk); #1;
+        check1 ("ID/EX RegWrite_out  (rst=1)", RW_idex_out,  1'b0);
+        check32("ID/EX PC_out        (rst=1)", PC_idex_out,  32'h0);
+        check32("ID/EX rdata1_out    (rst=1)", rd1_idex_out, 32'h0);
+        check32("ID/EX imm_out       (rst=1)", imm_idex_out, 32'h0);
+
+        // -- 6. Captura normal ---
+        $display("\n-- Prueba 6: Captura normal --");
         rst_idex = 0;
-        RegWrite_idex_in = 1;
-        ResultSrc_idex_in = 2'b10;
-        ALUSrc_idex_in = 1;
-        ALUControl_idex_in = 4'b0000;
-        PC_idex_in = 32'h00000200;
-        rdata1_idex_in = 32'h11111111;
-        rdata2_idex_in = 32'h22222222;
-        imm_idex_in = 32'h00000008;
-        rd_idex_in = 5'd5;
-        rs1_idex_in = 5'd1;
-        rs2_idex_in = 5'd2;
-        opcode_idex_in = 7'b0110011;
-        funct3_idex_in = 3'b000;
-        #10;
-        check_ID_EX("ID/EX data capture", 1'b1, 32'h00000200, 32'h11111111);
+        @(posedge clk); #1;
+        check1 ("ID/EX RegWrite_out",  RW_idex_out,   RW_idex_in);
+        check1 ("ID/EX ALUSrc_out",    AS_idex_out,   AS_idex_in);
+        check32("ID/EX PC_out",        PC_idex_out,   PC_idex_in);
+        check32("ID/EX PCplus4_out",   PCp4_idex_out, PCp4_idex_in);
+        check32("ID/EX rdata1_out",    rd1_idex_out,  rd1_idex_in);
+        check32("ID/EX rdata2_out",    rd2_idex_out,  rd2_idex_in);
+        check32("ID/EX imm_out",       imm_idex_out,  imm_idex_in);
+        check5 ("ID/EX rd_out",        rd_idex_out,   rd_idex_in);
+        check5 ("ID/EX rs1_out",       rs1_idex_out,  rs1_idex_in);
+        check5 ("ID/EX rs2_out",       rs2_idex_out,  rs2_idex_in);
 
-        // Prueba 6: Flush en ID/EX
-        $display("\nPrueba 6: Flush en ID/EX");
+        // -- 7. Flush: solo señales de control deben ir a 0, datos pueden permanecer ---
+        $display("\n-- Prueba 7: Flush (bubble: control = 0) --");
         flush_idex = 1;
-        #10;
-        check_ID_EX("ID/EX flush clears control", 1'b0, 32'h0, 32'h0);
+        @(posedge clk); #1;
+        check1 ("ID/EX RegWrite_out  (flush)", RW_idex_out,  1'b0);
+        check1 ("ID/EX Jump_out      (flush)", Jmp_idex_out, 1'b0);
+        check1 ("ID/EX Branch_out    (flush)", Br_idex_out,  1'b0);
+        check1 ("ID/EX MemWriteEn_out(flush)", MWE_idex_out, 1'b0);
+        flush_idex = 0;
 
-        // ============================================================
-        // PRUEBAS PARA reg_EX_MEM
-        // ============================================================
-        $display("\n=== PRUEBAS PARA reg_EX_MEM ===\n");
+        // -----------------------------------------------------------
+        // ===  reg_EX_MEM  ===
+        // -----------------------------------------------------------
+        $display("\n=== reg_EX_MEM ===\n");
 
-        // Prueba 7: Reset y captura
-        $display("Prueba 7: Reset y captura de datos");
+        // -- 8. Reset ---
+        $display("-- Prueba 8: Reset activo --");
         rst_exmem = 1;
-        #10;
-        
+        RW_exmem_in  = 1;   RS_exmem_in  = 2'b00;
+        MWE_exmem_in = 0;   MW_exmem_in  = 2'b00;
+        BS_exmem_in  = 3'b001;
+        PCp4_exmem_in = 32'h0000_0204;
+        ALU_exmem_in  = 32'h0000_0080;   // resultado típico de una ADD
+        rd2_exmem_in  = 32'h0000_00FF;
+        imm_exmem_in  = 32'h0000_0010;
+        rd_exmem_in   = 5'd7;
+        @(posedge clk); #1;
+        check32("EX/MEM ALUResult_out (rst=1)", ALU_exmem_out,  32'h0);
+        check32("EX/MEM PCplus4_out   (rst=1)", PCp4_exmem_out, 32'h0);
+        check5 ("EX/MEM rd_out        (rst=1)", rd_exmem_out,   5'd0);
+
+        // -- 9. Captura normal ---
+        $display("\n-- Prueba 9: Captura normal --");
         rst_exmem = 0;
-        RegWrite_exmem_in = 1;
-        ResultSrc_exmem_in = 2'b00;
-        MemWriteEn_exmem_in = 0;
-        PCplus4_exmem_in = 32'h00000204;
-        ALUResult_exmem_in = 32'hDEADBEEF;
-        rdata2_exmem_in = 32'h87654321;
-        imm_exmem_in = 32'h12345678;
-        rd_exmem_in = 5'd7;
-        #10;
-        if ((RegWrite_exmem_out === 1) && (ALUResult_exmem_out === 32'hDEADBEEF)) begin
-            $display("[PASS] EX/MEM data capture");
-            test_pass++;
-        end else begin
-            $display("[FAIL] EX/MEM data capture");
-            test_fail++;
-        end
+        @(posedge clk); #1;
+        check1 ("EX/MEM RegWrite_out",  RW_exmem_out,   RW_exmem_in);
+        check32("EX/MEM ALUResult_out", ALU_exmem_out,  ALU_exmem_in);
+        check32("EX/MEM rdata2_out",    rd2_exmem_out,  rd2_exmem_in);
+        check32("EX/MEM PCplus4_out",   PCp4_exmem_out, PCp4_exmem_in);
+        check32("EX/MEM imm_out",       imm_exmem_out,  imm_exmem_in);
+        check5 ("EX/MEM rd_out",        rd_exmem_out,   rd_exmem_in);
 
-        // Prueba 8: Preservación en EX/MEM
-        $display("\nPrueba 8: Preservación de datos");
-        // Verificar que el valor capturado es el correcto (antes de cambiar)
-        if (ALUResult_exmem_out === 32'hDEADBEEF) begin
-            $display("[PASS] EX/MEM preserves data");
-            test_pass++;
-        end else begin
-            $display("[FAIL] EX/MEM preserves data (got=%h, expected=%h)", ALUResult_exmem_out, 32'hDEADBEEF);
-            test_fail++;
-        end
+        // -- 10. Segunda captura: nuevos datos distintos ---
+        $display("\n-- Prueba 10: Segunda captura (nuevos valores) --");
+        ALU_exmem_in  = 32'h0000_0300;   // nueva dirección de memoria
+        rd2_exmem_in  = 32'hCCCC_CCCC;   // dato a escribir en memoria
+        rd_exmem_in   = 5'd12;
+        @(posedge clk); #1;
+        check32("EX/MEM ALUResult_out (2da)", ALU_exmem_out, 32'h0000_0300);
+        check32("EX/MEM rdata2_out    (2da)", rd2_exmem_out, 32'hCCCC_CCCC);
+        check5 ("EX/MEM rd_out        (2da)", rd_exmem_out,  5'd12);
 
-        // ============================================================
-        // PRUEBAS PARA reg_MEM_WB
-        // ============================================================
-        $display("\n=== PRUEBAS PARA reg_MEM_WB ===\n");
+        // -----------------------------------------------------------
+        // ===  reg_MEM_WB  ===
+        // -----------------------------------------------------------
+        $display("\n=== reg_MEM_WB ===\n");
 
-        // Prueba 9: Reset y captura
-        $display("Prueba 9: Reset y captura de datos");
+        // -- 11. Reset ---
+        $display("-- Prueba 11: Reset activo --");
         rst_memwb = 1;
-        #10;
-        
+        RW_memwb_in  = 1;   RS_memwb_in  = 2'b01;
+        PCp4_memwb_in = 32'h0000_0208;
+        ALU_memwb_in  = 32'h0000_0080;
+        mrd_memwb_in  = 32'h0000_00AB;   // dato leído de memoria
+        imm_memwb_in  = 32'h0000_0020;
+        rd_memwb_in   = 5'd10;
+        @(posedge clk); #1;
+        check32("MEM/WB ALUResult_out  (rst=1)", ALU_memwb_out, 32'h0);
+        check32("MEM/WB mem_rdata_out  (rst=1)", mrd_memwb_out, 32'h0);
+        check5 ("MEM/WB rd_out         (rst=1)", rd_memwb_out,  5'd0);
+
+        // -- 12. Captura normal ---
+        $display("\n-- Prueba 12: Captura normal --");
         rst_memwb = 0;
-        RegWrite_memwb_in = 1;
-        ResultSrc_memwb_in = 2'b01;
-        PCplus4_memwb_in = 32'h00000208;
-        ALUResult_memwb_in = 32'h99999999;
-        mem_rdata_memwb_in = 32'hAAAAAAAA;
-        imm_memwb_in = 32'hBBBBBBBB;
-        rd_memwb_in = 5'd10;
-        #10;
-        if ((RegWrite_memwb_out === 1) && (mem_rdata_memwb_out === 32'hAAAAAAAA)) begin
-            $display("[PASS] MEM/WB data capture");
+        @(posedge clk); #1;
+        check1 ("MEM/WB RegWrite_out",  RW_memwb_out,   RW_memwb_in);
+        check32("MEM/WB PCplus4_out",   PCp4_memwb_out, PCp4_memwb_in);
+        check32("MEM/WB ALUResult_out", ALU_memwb_out,  ALU_memwb_in);
+        check32("MEM/WB mem_rdata_out", mrd_memwb_out,  mrd_memwb_in);
+        check32("MEM/WB imm_out",       imm_memwb_out,  imm_memwb_in);
+        check5 ("MEM/WB rd_out",        rd_memwb_out,   rd_memwb_in);
+
+        // -- 13. ResultSrc propagado correctamente ---
+        $display("\n-- Prueba 13: ResultSrc propagado --");
+        RS_memwb_in = 2'b10;   // fuente = imm (U-type)
+        imm_memwb_in = 32'h0001_2000;
+        @(posedge clk); #1;
+        // ResultSrc[1:0] controla qué se escribe en el destino:
+        //   00=ALU  01=mem  10=PCplus4  11=imm
+        // Aquí entraron 2'b10, verificamos que se capturó
+        if (RS_memwb_out === 2'b10) begin
+            $display("  [PASS] %-35s  entrada=%b  salida=%b",
+                     "MEM/WB ResultSrc_out", RS_memwb_in, RS_memwb_out);
             test_pass++;
         end else begin
-            $display("[FAIL] MEM/WB data capture");
+            $display("  [FAIL] %-35s  esperado=%b  obtenido=%b",
+                     "MEM/WB ResultSrc_out", RS_memwb_in, RS_memwb_out);
             test_fail++;
         end
+        check32("MEM/WB imm_out (U-type)", imm_memwb_out, imm_memwb_in);
 
-        // Prueba 10: Verificar inmediato en MEM/WB
-        $display("\nPrueba 10: Inmediato en MEM/WB");
-        if (imm_memwb_out === 32'hBBBBBBBB) begin
-            $display("[PASS] MEM/WB immediate");
-            test_pass++;
-        end else begin
-            $display("[FAIL] MEM/WB immediate");
-            test_fail++;
-        end
-
-        // ============================================================
-        // Resumen
-        // ============================================================
+        // -----------------------------------------------------------
+        // Resumen final
+        // -----------------------------------------------------------
         $display("\n============================================================");
         $display("  RESUMEN");
         $display("============================================================");
@@ -406,4 +405,5 @@ module tb_pipeline_regs;
         $display("============================================================\n");
         $finish;
     end
+
 endmodule
