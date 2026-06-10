@@ -23,11 +23,11 @@ module ALU #(parameter n = 32)
 
 	 xor_gate #(n)	xor_op(a, b, xor_res);
 	 
-	 logic_shift_left #(n) lsl(a, b, 1'b0, lsl_res, C_lsl);
+	 logic_shift_left #(n) lsl(a, b[$clog2(n) - 1: 0], 1'b0, lsl_res, C_lsl);
 	 
-	 logic_shift_right #(n)	lsr(a, b, 1'b0, lsr_res, C_lsr);
+	 logic_shift_right #(n)	lsr(a, b[$clog2(n) - 1: 0], 1'b0, lsr_res, C_lsr);
 	 
-	 aritmethic_shift_right #(n)	asr(a, b, asr_res, C_asr);
+	 aritmethic_shift_right #(n)	asr(a, b[$clog2(n) - 1: 0], asr_res, C_asr);
 	 
 	// RV32I: 8 operaciones basadas en ALUControl
 	// 4'b0000: ADD,  4'b1000: SUB

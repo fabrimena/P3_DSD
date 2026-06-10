@@ -1,9 +1,9 @@
-module logic_shift_left #(parameter n = 8)
-	(input  logic [n - 1: 0] a,
-    input  logic [n - 1: 0] b,
+module logic_shift_left #(parameter n = 32)
+	(input  logic [n-1:0] a,
+    input  logic [$clog2(n)-1:0] b,
     input  logic fill,
-    output logic [n - 1: 0] y,
-	 output logic C);
+    output logic [n-1:0] y,
+    output logic C);
 	 
 	 mux2to1_Nbits #(n) sel((a << b) | ({n{fill}} & ~({n{1'b1}} << b)), {n{fill}}, b >= n, y);
 	 

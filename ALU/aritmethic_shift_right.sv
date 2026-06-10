@@ -1,5 +1,6 @@
 module aritmethic_shift_right #(parameter n = 4)
-	(input logic [n - 1: 0] a, b,
+	(input logic [n - 1: 0] a,
+    input logic [$clog2(n) - 1: 0] b,
     output logic [n - 1: 0] y,
 	 output logic C);
 	 
