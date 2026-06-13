@@ -122,6 +122,9 @@ Diferencias clave respecto a `top.sv`:
 4. **Inmediato propagado hasta WB**: el campo `imm` viaja a través de `ID/EX → EX/MEM → MEM/WB`, corrigiendo el bug donde LUI escribía `0x00000000` en lugar del inmediato superior.
 5. **`BitSel` y `ALUResult[1:0]` en WB**: se propagan con registros FF locales para el desplazamiento y formateo correcto de los datos leídos de memoria (instrucciones `lb`, `lh`, `lbu`, `lhu`).
 
+
+
+![Diagrama Adaptado](./images/Diagrama_act.png) 
 ---
 
 ## 3. Correcciones aplicadas durante la integración
