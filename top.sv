@@ -17,24 +17,38 @@ module top (
 // *** ETAPA IF: Instruction Fetch ***
 // ============================================================
 
-    // Señales de control de hazards (vienen de hazard_unit)
     logic        stall;
     logic        flush_ID_EX;
-    logic        PCSrc_EX;     // salto resuelto en etapa EX
-    logic [31:0] PCTarget_EX;  // dirección de salto calculada en EX
+    logic        PCSrc_EX;
+    logic [31:0] PCTarget_EX;
+
+    logic        misprediction;
 
     logic [31:0] PC_IF;
     logic [31:0] PCplus4_IF;
-
-    // El PC se frena si hay stall
-    // pc_increment maneja el mux PCsrc internamente,
-    // pero necesitamos poder congelarlo → usamos una versión
-    // con enable de stall.
     logic [31:0] PCnext;
     logic [31:0] PC_reg;
-    logic [31:0] PC;           // Alias para compatibilidad con testbenches
+    logic [31:0] PC;
 
-    // Adder PC+4
+    // Detección rápida de instrucción de salto en IF
+    // Necesaria para consultar el predictor antes de pasar a ID.
+    // Usa solo el opcode (bits[6:0]) sin decodificación completa.
+    logic [31:0] instr_IF;
+    logic        is_branch_IF;
+
+    localparam BRANCH_OP = 7'b1100011;
+    localparam JAL_OP    = 7'b1101111;
+    localparam JALR_OP   = 7'b1100111;
+
+    assign is_branch_IF = (instr_IF[6:0] == BRANCH_OP) ||
+                          (instr_IF[6:0] == JAL_OP)    ||
+                          (instr_IF[6:0] == JALR_OP);
+
+    // Salidas del predictor
+    logic        bp_taken;
+    logic [31:0] bp_target;
+
+    // ── Adder PC+4 ──────────────────────────────────────────
     adder #(32) pc_adder_if (
         .a   (PC_reg),
         .b   (32'd4),
@@ -42,13 +56,18 @@ module top (
         .y   (PCplus4_IF)
     );
 
-    // Mux: PC+4 o target de salto
-    mux2to1_Nbits #(32) pc_mux_if (
-        .sel (PCSrc_EX),
-        .a   (PCplus4_IF),
-        .b   (PCTarget_EX),
-        .y   (PCnext)
-    );
+    // ── Mux del PC: 3 prioridades ───────────────────────────
+    //   Prioridad 1 (más alta): corrección EX  (misprediction)
+    //   Prioridad 2: predicción del predictor  (bp_taken)
+    //   Prioridad 3: PC+4 normal
+    always_comb begin
+        if (PCSrc_EX)           // corrección desde EX (misprediction o jump)
+            PCnext = PCTarget_EX;
+        else if (bp_taken)      // predicción temprana en IF
+            PCnext = bp_target;
+        else
+            PCnext = PCplus4_IF;
+    end
 
     // Registro PC con enable (stall lo congela)
     always_ff @(posedge clk) begin
@@ -61,36 +80,78 @@ module top (
     assign PC_IF = PC_reg;
 
     // Memoria de instrucciones
-    logic [31:0] instr_IF;
     instructionMemory instr_mem (
         .PC   (PC_IF[6:2]),
         .instr(instr_IF)
     );
 
+    // ── Instancia del predictor ──────────────────────────────
+    branch_predictor #(.ENTRIES(64)) u_bp (
+        .clk            (clk),
+        .rst            (rst),
+        // Consulta desde IF
+        .pc_if          (PC_IF),
+        .is_branch_if   (is_branch_IF),
+        // Predicción → mux PCnext
+        .bp_taken       (bp_taken),
+        .bp_target      (bp_target),
+        // Actualización desde EX (resultado real)
+        .update_en      (Branch_EX | Jump_EX),   // actualizar si era branch/jump
+        .branch_taken_ex(PCSrc_EX),              // 1 = salto realmente tomado
+        .pc_ex          (PC_EX),
+        .pc_target_ex   (PCTarget_EX)
+    );
+
+    // ── Lógica de misprediction ──────────────────────────────
+    // Hay misprediction cuando:
+    //   a) El predictor dijo TOMADO pero el salto NO se tomó (bp_taken_EX & !PCSrc_EX)
+    //   b) El predictor dijo NO TOMADO pero el salto SÍ se tomó (!bp_taken_EX & PCSrc_EX)
+    // Se necesita propagar bp_taken a través del registro ID/EX.
+    // (Ver sección ID/EX más abajo para la señal bp_taken_ID_EX)
+    logic bp_taken_ID;    // valor predicho para la instrucción que ahora está en ID
+    logic bp_taken_EX;    // valor predicho para la instrucción que ahora está en EX
+
+    assign misprediction = (Branch_EX | Jump_EX) &
+                           (bp_taken_EX ^ PCSrc_EX);
+
 // ============================================================
 // *** Registro IF/ID ***
+// flush ahora usa misprediction en lugar de PCSrc_EX.
+// Si el predictor acertó y el salto se tomó, IF/ID ya tiene la
+// instrucción correcta (no hay burbuja). Solo se flushea si
+// hubo error de predicción.
 // ============================================================
 
     logic [31:0] PC_ID, PCplus4_ID, instr_ID;
 
     reg_IF_ID u_IF_ID (
-        .clk       (clk),
-        .rst       (rst),
-        .stall     (stall),
-        .flush     (PCSrc_EX),   // si hay salto, vaciar instrucción fetched
-        .PC_in     (PC_IF),
-        .PCplus4_in(PCplus4_IF),
-        .instr_in  (instr_IF),
-        .PC_out    (PC_ID),
+        .clk        (clk),
+        .rst        (rst),
+        .stall      (stall),
+        .flush      (misprediction),
+        .PC_in      (PC_IF),
+        .PCplus4_in (PCplus4_IF),
+        .instr_in   (instr_IF),
+        .PC_out     (PC_ID),
         .PCplus4_out(PCplus4_ID),
-        .instr_out (instr_ID)
+        .instr_out  (instr_ID)
     );
+
+    // Propagación de bp_taken a través de IF/ID
+    // (registro simple 1-bit, sin stall/flush propio porque si
+    //  la instrucción se flushea, el valor no importa)
+    always_ff @(posedge clk) begin
+        if (rst || misprediction)
+            bp_taken_ID <= 1'b0;
+        else if (!stall)
+            bp_taken_ID <= bp_taken;
+    end
 
 // ============================================================
 // *** ETAPA ID: Instruction Decode ***
+// (sin cambios en la lógica; solo se añade propagación de bp_taken)
 // ============================================================
 
-    // Decodificación de campos de la instrucción
     logic [6:0] opcode_ID;
     logic [4:0] rd_ID, rs1_ID, rs2_ID;
     logic [2:0] funct3_ID;
@@ -102,16 +163,15 @@ module top (
     always_comb begin
         rs1_ID = instr_ID[19:15];
         case(opcode_ID)
-            7'b0110011,   // R-type
-            7'b0100011,   // S-type
-            7'b1100011:   // B-type
+            7'b0110011,
+            7'b0100011,
+            7'b1100011:
                 rs2_ID = instr_ID[24:20];
             default:
                 rs2_ID = 5'b00000;
         endcase
     end
 
-    // Señales de control generadas por la unidad de control
     logic       RegWrite_ID;
     logic [1:0] ResultSrc_ID;
     logic [1:0] MemWrite_ID;
@@ -122,17 +182,17 @@ module top (
     logic [2:0] BitSel_ID;
     logic       Sh_ID;
     logic       Jump_ID;
-    logic       Branch_ID; // no se usa en esta etapa, pasa a EX
-    logic [2:0] ALUFlags_ID;  // dummy; las flags reales se generan en EX
+    logic       Branch_ID;
+    logic [2:0] ALUFlags_ID;
     logic       PCSrc_ID_dummy;
 
     control_unit u_control (
         .op        (opcode_ID),
         .funct3    (funct3_ID),
         .funct7    (instr_ID[31:25]),
-        .ALUFlags  (3'b000),      // no afecta a señales de decodificación
+        .ALUFlags  (3'b000),
         .ALUMSB    (1'b0),
-        .PCSrc     (PCSrc_ID_dummy), // no se usa aquí; PCSrc se recalcula en EX
+        .PCSrc     (PCSrc_ID_dummy),
         .ResultSrc (ResultSrc_ID),
         .MemWrite  (MemWrite_ID),
         .MemWriteEn(MemWriteEn_ID),
@@ -144,17 +204,9 @@ module top (
         .Sh        (Sh_ID)
     );
 
-    // Jump/Branch: los extrae main_decoder internamente a través de control_unit.
-    // Para el pipeline necesitamos Branch y Jump; los re-derivamos aquí
-    // de forma puramente combinacional a partir del opcode.
-    localparam BRANCH_OP = 7'b1100011;
-    localparam JAL_OP    = 7'b1101111;
-    localparam JALR_OP   = 7'b1100111;
-
     assign Branch_ID = (opcode_ID == BRANCH_OP);
     assign Jump_ID   = (opcode_ID == JAL_OP) || (opcode_ID == JALR_OP);
 
-    // Extensión de inmediato
     logic [31:0] imm_ID;
     extend u_imm_ext (
         .instr  (instr_ID),
@@ -162,7 +214,6 @@ module top (
         .ImmExt (imm_ID)
     );
 
-    // Banco de registros (escritura desde etapa WB)
     logic [31:0] rdata1_ID, rdata2_ID;
     logic [31:0] writeback_data_WB;
     logic        RegWrite_WB;
@@ -182,6 +233,8 @@ module top (
 
 // ============================================================
 // *** Registro ID/EX ***
+// flush ahora usa misprediction.
+// Se añade propagación de bp_taken_ID → bp_taken_EX.
 // ============================================================
 
     logic        RegWrite_EX;
@@ -203,7 +256,7 @@ module top (
 
     reg_ID_EX u_ID_EX (
         .clk           (clk),           .rst          (rst),
-        .flush         (flush_ID_EX),
+        .flush         (flush_ID_EX),   // flush_ID_EX viene de hazard_unit (sin cambio)
         .RegWrite_in   (RegWrite_ID),   .RegWrite_out   (RegWrite_EX),
         .ResultSrc_in  (ResultSrc_ID),  .ResultSrc_out  (ResultSrc_EX),
         .MemWriteEn_in (MemWriteEn_ID), .MemWriteEn_out (MemWriteEn_EX),
@@ -226,24 +279,25 @@ module top (
         .funct3_in     (funct3_ID),     .funct3_out     (funct3_EX)
     );
 
+    // Propagación bp_taken: ID → EX (1 FF más, 1 bit)
+    always_ff @(posedge clk) begin
+        if (rst || flush_ID_EX)
+            bp_taken_EX <= 1'b0;
+        else
+            bp_taken_EX <= bp_taken_ID;
+    end
+
 // ============================================================
 // *** ETAPA EX: Execute ***
+// (sin cambios internos; misprediction se calcula en IF)
 // ============================================================
 
-    // Señales de forwarding
     logic [1:0] ForwardA, ForwardB;
-
-    // Writeback data desde MEM/WB (para forwarding)
-    // (declarado abajo, se usa también en ID)
-
-    // Resultado de ALU desde EX/MEM (para forwarding)
     logic [31:0] ALUResult_MEM;
 
-    // Muxes de forwarding para entradas de la ALU
     logic [31:0] ALUin0_pre, ALUin1_pre;
     logic [31:0] ALUin0, ALUin1_reg;
 
-    // Forward A
     always_comb begin
         case (ForwardA)
             2'b00: ALUin0_pre = rdata1_EX;
@@ -253,7 +307,6 @@ module top (
         endcase
     end
 
-    // Forward B (antes del mux ALUSrc)
     always_comb begin
         case (ForwardB)
             2'b00: ALUin1_pre = rdata2_EX;
@@ -263,16 +316,13 @@ module top (
         endcase
     end
 
-    // Sh: mascara 5 bits LSB del shift amount (rs2 o imm)
     logic [31:0] ALUin0_sh, ALUin1_sh;
-    assign ALUin0_sh = ALUin0_pre;                               // rs1 nunca se enmascara
+    assign ALUin0_sh = ALUin0_pre;
     assign ALUin1_sh = Sh_EX ? {27'b0, ALUin1_pre[4:0]} : ALUin1_pre;
 
-    // Mux ALUSrc
     assign ALUin0      = ALUin0_sh;
     assign ALUin1_reg  = ALUSrc_EX ? imm_EX : ALUin1_sh;
 
-    // ALU
     logic [31:0] ALUResult_EX;
     logic [2:0]  ALUFlags_EX;
 
@@ -284,16 +334,15 @@ module top (
         .ALUFlags  (ALUFlags_EX)
     );
 
-    // Lógica de branch/jump (replicada de control_unit pero con flags reales)
     logic BranchTaken_EX;
     always_comb begin
         BranchTaken_EX = 1'b0;
         if (Branch_EX) begin
             case (funct3_EX)
-                3'b000: BranchTaken_EX =  ALUFlags_EX[0];   // beq
-                3'b001: BranchTaken_EX = ~ALUFlags_EX[0];   // bne
-                3'b100: BranchTaken_EX =  ALUFlags_EX[1];   // blt
-                3'b101: BranchTaken_EX = ~ALUFlags_EX[1];   // bge
+                3'b000: BranchTaken_EX =  ALUFlags_EX[0];
+                3'b001: BranchTaken_EX = ~ALUFlags_EX[0];
+                3'b100: BranchTaken_EX =  ALUFlags_EX[1];
+                3'b101: BranchTaken_EX = ~ALUFlags_EX[1];
                 default: BranchTaken_EX = 1'b0;
             endcase
         end
@@ -301,12 +350,10 @@ module top (
 
     assign PCSrc_EX = BranchTaken_EX | Jump_EX;
 
-    // Cálculo del PC destino
     assign PCTarget_EX = (opcode_EX == JALR_OP) ?
                          (ALUResult_EX & ~32'd1) :
                          (PC_EX + imm_EX);
 
-    // rdata2 con forwarding (para stores)
     logic [31:0] rdata2_fwd_EX;
     always_comb begin
         case (ForwardB)
@@ -318,7 +365,7 @@ module top (
     end
 
 // ============================================================
-// *** Registro EX/MEM ***
+// *** Registro EX/MEM  —  sin cambios *** 
 // ============================================================
 
     logic        RegWrite_MEM;
@@ -346,10 +393,9 @@ module top (
     );
 
 // ============================================================
-// *** ETAPA MEM: Memory Access ***
+// *** ETAPA MEM  —  sin cambios ***
 // ============================================================
 
-    // Generación de byte enables (igual que en top.sv)
     logic [3:0] ram_we;
     always_comb begin
         ram_we = 4'b0000;
@@ -386,7 +432,7 @@ module top (
     );
 
 // ============================================================
-// *** Registro MEM/WB ***
+// *** Registro MEM/WB  —  sin cambios ***
 // ============================================================
 
     logic [1:0]  ResultSrc_WB;
@@ -395,10 +441,6 @@ module top (
     logic [31:0] mem_rdata_WB_raw;
     logic [31:0] imm_WB;
 
-    // Pasamos BitSel y ALUResult[1:0] a WB para shift/format de datos leidos
-    // Los agrupamos con imm para aprovechar el campo imm_in del registro MEM/WB
-    // Solución simple: agregar señales extra al registro MEM/WB
-    // En lugar de modificar el módulo paramétrico, usamos registros FF locales
     logic [2:0] BitSel_WB;
     logic [1:0] ALUResultLSB_WB;
 
@@ -424,10 +466,9 @@ module top (
     );
 
 // ============================================================
-// *** ETAPA WB: Write Back ***
+// *** ETAPA WB  —  sin cambios ***
 // ============================================================
 
-    // Shift y format de datos leidos de memoria
     logic [31:0] mem_rdata_shifted_WB;
     logic [31:0] mem_rdata_formatted_WB;
 
@@ -444,34 +485,36 @@ module top (
             2'b00: writeback_data_WB = ALUResult_WB;
             2'b01: writeback_data_WB = mem_rdata_formatted_WB;
             2'b10: writeback_data_WB = PCplus4_WB;
-            2'b11: writeback_data_WB = imm_WB;   // LUI
+            2'b11: writeback_data_WB = imm_WB;
             default: writeback_data_WB = ALUResult_WB;
         endcase
     end
 
 // ============================================================
 // *** HAZARD UNIT ***
+// PCSrc se reemplaza por misprediction:
+//   flush_IF_ID = misprediction (no PCSrc_EX)
+//   flush_ID_EX = load_use_hazard || misprediction
 // ============================================================
 
     hazard_unit u_hazard (
-        .ID_EX_rs1      (rs1_EX),
-        .ID_EX_rs2      (rs2_EX),
-        .ID_EX_ResultSrc1(ResultSrc_EX[0]),  // bit 0 = 1 para LOAD
-        .ID_EX_rd       (rd_EX),
-        .EX_MEM_rd      (rd_MEM),
-        .EX_MEM_RegWrite(RegWrite_MEM),
-        .MEM_WB_rd      (rd_WB),
-        .MEM_WB_RegWrite(RegWrite_WB),
-        .IF_ID_rs1      (rs1_ID),
-        .IF_ID_rs2      (rs2_ID),
-        .PCSrc          (PCSrc_EX),
-        .ForwardA       (ForwardA),
-        .ForwardB       (ForwardB),
-        .stall          (stall),
-        .flush_ID_EX    (flush_ID_EX)
+        .ID_EX_rs1       (rs1_EX),
+        .ID_EX_rs2       (rs2_EX),
+        .ID_EX_ResultSrc1(ResultSrc_EX[0]),
+        .ID_EX_rd        (rd_EX),
+        .EX_MEM_rd       (rd_MEM),
+        .EX_MEM_RegWrite (RegWrite_MEM),
+        .MEM_WB_rd       (rd_WB),
+        .MEM_WB_RegWrite (RegWrite_WB),
+        .IF_ID_rs1       (rs1_ID),
+        .IF_ID_rs2       (rs2_ID),
+        .PCSrc           (misprediction),
+        .ForwardA        (ForwardA),
+        .ForwardB        (ForwardB),
+        .stall           (stall),
+        .flush_ID_EX     (flush_ID_EX)
     );
 
-    // Alias para compatibilidad con testbenches
     assign PC = PC_reg;
 
 endmodule

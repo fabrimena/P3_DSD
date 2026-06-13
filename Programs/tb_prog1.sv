@@ -93,15 +93,15 @@ module tb_prog1;
         // Estado final observado del programa actual.
         check_reg("BASE",  1, 32'h00000100);     // x1 debe conservar 0x100
         check_reg("VALUE", 2, 32'h12345678);     // x2 debe ser 0x12345678
-        check_reg("X3",    3, 32'h00000000);     // x3 quedó en 0
+        check_reg("X3",    3, 32'h0000003F);     // x3 = srai(0xFF, 2) = 0x3F
         check_reg("X4",    4, 32'h00000000);     // x4 quedó en 0
         check_reg("X5",    5, 32'h000000FF);     // x5 quedó en 0xFF
         check_reg("LW",    6, 32'h00000100);     // carga desde 0x104 dejó 0x100
-        check_reg("XOR",  27, 32'h00000100);     // x1 ^ x3 = 0x100
+        check_reg("XOR",  27, 32'h0000013F);     // x1 ^ x3 = 0x100 ^ 0x3F = 0x13F
         check_reg("LHU",  28, 32'h00000100);     // carga halfword desde 0x104 = 0x100
-        check_reg("SRA",  29, 32'h12345678);     // x2 >>> x3 = x2
+        check_reg("SRA",  29, 32'h00000000);     // x2 >>> x3 = 0x12345678 >>> 0x3F = 0x00000000
         check_reg("SLT",  30, 32'h00000001);  // (0 <s 0x12345678) = 1
-        check_reg("SLTI", 31, 32'h00000001);  // (0 <s 1) = 1
+        check_reg("SLTI", 31, 32'h00000000);  // (0x3F <s 1) = 0
 
         $display("\n  PASS: %0d | FAIL: %0d", test_pass, test_fail);
         if (test_fail == 0)
