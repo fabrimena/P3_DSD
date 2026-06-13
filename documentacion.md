@@ -17,6 +17,8 @@ IF → [IF/ID] → ID → [ID/EX] → EX → [EX/MEM] → MEM → [MEM/WB] → W
 
 Con este esquema, en régimen estacionario se ejecuta **una instrucción por ciclo** (frente al ciclo largo del diseño uniciclo), logrando un mayor rendimiento. El precio a pagar son los *hazards* de datos y de control, que se resuelven mediante las técnicas descritas a continuación.
 
+![Diagrama Adaptado](./images/DIAGRAMA_P3.png) 
+
 ### Cambios aplicados sobre el Proyecto 2
 
 | Elemento | Acción |
@@ -157,7 +159,63 @@ Igual que en el Proyecto 2. Explota JAL/JALR y branches condicionales para calcu
 
 ---
 
-## 5. Discusión de resultados
+## 5. Ejecución de testbenches individuales
+
+Cada módulo posee un script shell (`run_*.sh`) que compila y ejecuta su testbench correspondiente de forma aislada. Esto permite verificar el funcionamiento correcto de cada componente antes de integrarlo en el procesador completo.
+
+### Scripts disponibles
+
+| Módulo | Script | Ubicación | Ejecución |
+|---|---|---|---|
+| ALU | `run_ALU.sh` | `ALU/` | `cd ALU && ./run_ALU.sh` |
+| BitSelector | `run_BitSelector.sh` | `BitSelector/` | `cd BitSelector && ./run_BitSelector.sh` |
+| ControlUnit | `run_ControlUnit.sh` | `ControlUnit/` | `cd ControlUnit && ./run_ControlUnit.sh` |
+| Extend | `run_Extend.sh` | `Extend/` | `cd Extend && ./run_Extend.sh` |
+| Flops (Pipeline Regs) | `run_Flops.sh` | `Flops/` | `cd Flops && ./run_Flops.sh` |
+| HazardUnit | `run_HazardUnit.sh` | `HazardUnit/` | `cd HazardUnit && ./run_HazardUnit.sh` |
+| Memory | `run_Memory.sh` | `Memory/` | `cd Memory && ./run_Memory.sh` |
+| PC | `run_PC.sh` | `PC/` | `cd PC && ./run_PC.sh` |
+| RegisterFile | `run_RegisterFile.sh` | `RegisterFile/` | `cd RegisterFile && ./run_RegisterFile.sh` |
+| BranchPredictor | `run_BranchPredictor.sh` | `BranchPredictor/` | `cd BranchPredictor && ./run_BranchPredictor.sh` |
+
+### Prueba completa del procesador
+
+Para ejecutar todos los módulos de una sola vez, incluyendo los programas de prueba (`Prog1_Math` y `Prog2_Collatz`), se proporciona un script maestro:
+
+```bash
+cd /home/iquick/DSD/P3/P3_DSD
+./run_tests.sh
+```
+
+Este script ejecuta secuencialmente los testbenches de todos los módulos individuales y los dos programas integrados, generando un reporte final con el conteo de módulos que pasaron y fallaron.
+
+### Ejemplo de ejecución individual
+
+```bash
+# Ejecutar solo el testbench de la ALU
+$ cd ALU
+$ ./run_ALU.sh
+Compilando tb_ALU -> ./tb_ALU.sv ./ALU.sv ...
+<salida del simulador>
+TODOS LOS TESTS PASARON
+
+# Ejecutar solo el testbench del HazardUnit
+$ cd ../HazardUnit
+$ ./run_HazardUnit.sh
+<salida del simulador>
+```
+
+### Archivos generados durante la ejecución
+
+Cada ejecución genera los siguientes archivos temporales:
+
+- `/tmp/tb_out` — Ejecutable compilado (binario vvp)
+- `/tmp/warn.log` — Log de warnings/errores de la compilación
+- `*.vcd` — Archivos de traza de señales (útiles para debugging con GTKWave)
+
+---
+
+## 6. Discusión de resultados
 
 - El pipeline de 5 etapas ejecuta correctamente las 37 instrucciones RV32I implementadas.
 - El forwarding elimina la mayoría de las penalizaciones de hazards de datos, introduciendo latencia adicional solo en el caso load-use (1 ciclo).
